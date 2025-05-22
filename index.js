@@ -1,60 +1,53 @@
 require('dotenv').config();
 const express = require('express');
-const { AccessToken } = require("livekit-server-sdk");
 
 const app = express();
 app.use(express.json());
 
+// ───────────────────────────────────────────────────────────────
+//  POST  /call   –  n8n sends join/admin tokens + prompt + meta
+// ───────────────────────────────────────────────────────────────
 app.post('/call', (req, res) => {
-  const { room_name, agent_name, initial_prompt, user_metadata } = req.body;
-
-  // Validate required fields
-  if (!room_name || !agent_name || !initial_prompt || !user_metadata) {
-    return res.status(400).json({ error: 'Missing required fields' });
-  }
-
-  // Log the received configuration
-  console.log('Received configuration:', {
+  const {
     room_name,
     agent_name,
+    join_token,      //  ✅ required – pre-signed JWT from n8n
+    admin_token,     //  🔒 optional – for room admin actions
+    initial_prompt,
+    user_metadata = {}
+  } = req.body;
+
+  // 1️⃣  basic validation – fail fast if the join_token is missing
+  if (!room_name || !agent_name || !join_token) {
+    return res.status(400).json({ error: 'room_name, agent_name, and join_token are required' });
+  }
+
+  // 2️⃣  log the full config for observability (handy in Railway logs)
+  console.log('Received from n8n →', {
+    room_name,
+    agent_name,
+    has_join_token:  !!join_token,
+    has_admin_token: !!admin_token,
     initial_prompt,
     user_metadata
+  }); /* good practice for debugging :contentReference[oaicite:0]{index=0} */
+
+  // 3️⃣  👉 TODO: launch your STT / TTS / LLM pipeline here,
+  //               passing the tokens & prompt to whatever worker
+  //               you’ll run (node-worker, python, etc.)
+
+  // 4️⃣  send an acknowledgement back to n8n
+  res.json({
+    status: 'Agent accepted',
+    received: {
+      room_name,
+      agent_name,
+      has_join_token:  true,
+      has_admin_token: !!admin_token
+    }
   });
-
-  try {
-    // Create access token
-    const at = new AccessToken(
-      process.env.LIVEKIT_API_KEY,
-      process.env.LIVEKIT_API_SECRET,
-      {
-        identity: agent_name,
-        name: agent_name
-      }
-    );
-
-    // Add permissions to the token
-    at.addGrant({
-      roomJoin: true,
-      room: room_name,
-      canPublish: true,
-      canSubscribe: true
-    });
-
-    // Generate the token
-    const token = at.toJwt();
-
-    // Send response
-    res.json({
-      status: "Agent dispatched",
-      token
-    });
-  } catch (error) {
-    console.error('Error generating token:', error);
-    res.status(500).json({ error: 'Failed to generate token' });
-  }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+// Always listen on Railway-provided PORT (falls back to 3000 locally)
+const PORT = process.env.PORT || 3000;              // Railway injects PORT :contentReference[oaicite:1]{index=1}
+app.listen(PORT, () => console.log(`✅ Agent server listening on ${PORT}`));
