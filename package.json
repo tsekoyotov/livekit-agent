@@ -1,0 +1,10 @@
+{
+    "name": "livekit-agent-root",
+    "version": "1.0.0",
+    "private": true,
+    "scripts": {
+      "build": "cd template-bot && pnpm build",
+      "start": "cd template-bot && pnpm start"
+    }
+  }
+  
