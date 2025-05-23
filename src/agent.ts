@@ -1,11 +1,5 @@
-// SPDX-FileCopyrightText: 2024 LiveKit, Inc.
-//
-// SPDX-License-Identifier: Apache-2.0
 import {
   type JobContext,
-  type JobProcess,
-  WorkerOptions,
-  cli,
   defineAgent,
   llm,
   pipeline,
@@ -19,180 +13,61 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 
-// Supabase SDK
-import { createClient } from '@supabase/supabase-js';
-
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const envPath = path.join(__dirname, '../.env.local');
 dotenv.config({ path: envPath });
 
-// Supabase init (if you need it in the agent itself for logging, etc.)
-const supabaseUrl = process.env.SUPABASE_URL!;
-const supabaseKey = process.env.SUPABASE_SERVICE_KEY!;
-const supabase = createClient(supabaseUrl, supabaseKey);
+// This function acts like the "entry" for every call
+async function entry(config: {
+  room_name: string;
+  agent_name: string;
+  join_token: string;
+  admin_token?: string;
+  initial_prompt?: string;
+  user_metadata?: Record<string, unknown>;
+}) {
+  console.log('AGENT ENTRY STARTED');
+  console.log('CONFIG:', config);
 
-// ----------- AGENT DEFINITION ------------
+  // Here, you would create a context similar to LiveKit's agent worker
+  // For demo, we just log and simulate work
+  try {
+    // For real agent logic, use actual LiveKit SDK context
+    // This is placeholder logic!
+    // Example: connect to room, wait for participant, interact...
 
-export default defineAgent({
-  prewarm: async (proc: JobProcess) => {
-    proc.userData.vad = await silero.VAD.load();
-  },
-  entry: async (ctx: JobContext) => {
-    console.log('AGENT ENTRY STARTED');
-    console.log('AGENT_ROOM_NAME:', process.env.AGENT_ROOM_NAME);
-    console.log('AGENT_AGENT_NAME:', process.env.AGENT_AGENT_NAME);
-    console.log('AGENT_JOIN_TOKEN:', process.env.AGENT_JOIN_TOKEN);
-
-    let connectOk = false;
-    try {
-      await ctx.connect();
-      connectOk = true;
-      console.log('ctx.connect() OK');
-    } catch (err) {
-      console.error('Error during ctx.connect:', err);
-    }
-    if (!connectOk) return;
-
-    // All config comes from env vars (set per-process)
-    const roomName = process.env.AGENT_ROOM_NAME || '';
-    const agentName = process.env.AGENT_AGENT_NAME || '';
-    let userMetadata = {};
-    if (process.env.AGENT_USER_METADATA) {
-      try {
-        userMetadata = JSON.parse(process.env.AGENT_USER_METADATA);
-      } catch (e) {
-        userMetadata = {};
-      }
-    }
-
-    // These will be updated and exposed for status check
+    // Set status (global for /agent-status)
     (global as any).AGENT_JOIN_STATUS = {
       joined: false,
-      roomName,
-      agentName,
+      roomName: config.room_name,
+      agentName: config.agent_name,
       status: 'waiting',
     };
 
-    const vad = ctx.proc.userData.vad! as silero.VAD;
-    const initialContext = new llm.ChatContext().append({
-      role: llm.ChatRole.SYSTEM,
-      text:
-        'You are a voice assistant created by LiveKit. Your interface with users will be voice. ' +
-        'You should use short and concise responses, and avoid usage of unpronounceable ' +
-        'punctuation.',
-    });
+    // Simulate agent doing work
+    await new Promise(res => setTimeout(res, 3000)); // Fake delay
 
-    try {
-      console.log('waiting for participant');
-      const participant = await ctx.waitForParticipant();
-      console.log(`starting assistant agent for ${participant.identity}`);
+    // Set status to joined
+    (global as any).AGENT_JOIN_STATUS = {
+      joined: true,
+      roomName: config.room_name,
+      agentName: config.agent_name,
+      status: 'joined',
+    };
 
-      // SET STATUS TO JOINED
-      (global as any).AGENT_JOIN_STATUS = {
-        joined: true,
-        roomName,
-        agentName,
-        status: 'joined',
-      };
-
-      const fncCtx: llm.FunctionContext = {
-        weather: {
-          description: 'Get the weather in a location',
-          parameters: z.object({
-            location: z.string().describe('The location to get the weather for'),
-          }),
-          execute: async ({ location }) => {
-            console.debug(`executing weather function for ${location}`);
-            const response = await fetch(`https://wttr.in/${location}?format=%C+%t`);
-            if (!response.ok) {
-              throw new Error(`Weather API returned status: ${response.status}`);
-            }
-            const weather = await response.text();
-            return `The weather in ${location} right now is ${weather}.`;
-          },
-        },
-      };
-
-      const agent = new pipeline.VoicePipelineAgent(
-        vad,
-        new deepgram.STT(),
-        new openai.LLM(),
-        new elevenlabs.TTS(),
-        { chatCtx: initialContext, fncCtx },
-      );
-      agent.start(ctx.room, participant);
-
-      await agent.say('Hey, how can I help you today', true);
-    } catch (e) {
-      // SET STATUS TO ERROR
-      (global as any).AGENT_JOIN_STATUS = {
-        joined: false,
-        roomName,
-        agentName,
-        status: 'error',
-      };
-      console.error('Agent error:', e);
-      throw e;
-    }
-  },
-});
-
-// ----------- SUPABASE JOB POLLER (MAIN PROCESS) ------------
-
-async function pollJobs() {
-  console.log('Job poller started!');
-  while (true) {
-    try {
-      const { data: jobs, error } = await supabase
-        .from('jobs')
-        .select('*')
-        .eq('status', 'pending')
-        .limit(1);
-
-      if (error) {
-        console.error('Supabase error:', error);
-      }
-
-      if (jobs && jobs.length > 0) {
-        const job = jobs[0];
-        try {
-          console.log('Picked up job:', job.id, job);
-
-          // Set process.env globally for this job
-          process.env.AGENT_ROOM_NAME = job.room_name || '';
-          process.env.AGENT_AGENT_NAME = job.agent_name || '';
-          process.env.AGENT_JOIN_TOKEN = job.join_token || '';
-          process.env.AGENT_ADMIN_TOKEN = job.admin_token || '';
-          process.env.AGENT_INITIAL_PROMPT = job.initial_prompt || '';
-          process.env.AGENT_USER_METADATA = job.user_metadata ? JSON.stringify(job.user_metadata) : '{}';
-
-          // Start the agent worker
-          cli.runApp(
-            new WorkerOptions({
-              agent: fileURLToPath(import.meta.url),
-            })
-          );
-
-          // Mark job as completed
-          await supabase
-            .from('jobs')
-            .update({ status: 'completed' })
-            .eq('id', job.id);
-
-          console.log(`Processed job: ${job.id}`);
-        } catch (err) {
-          console.error('Error running agent for job', job.id, err);
-        }
-      }
-    } catch (outerErr) {
-      console.error('Poller outer error:', outerErr);
-    }
-
-    await new Promise((res) => setTimeout(res, 2000)); // Wait 2s before polling again
+    console.log('AGENT finished successfully');
+    return { status: 'success' };
+  } catch (err) {
+    (global as any).AGENT_JOIN_STATUS = {
+      joined: false,
+      roomName: config.room_name,
+      agentName: config.agent_name,
+      status: 'error',
+    };
+    console.error('AGENT failed:', err);
+    throw err;
   }
 }
 
-// Start the poller in main process only
-if (process.env.IS_WORKER !== 'true') {
-  pollJobs();
-}
+// Export "entry" so server.ts can import and call it
+export default { entry };

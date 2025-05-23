@@ -3,6 +3,7 @@ import dotenv from 'dotenv';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createClient } from '@supabase/supabase-js';
+import agent from './agent.js'; // Use .js for ESM, .ts for TS-node
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const envPath = path.join(__dirname, '../.env.local');
@@ -25,7 +26,6 @@ interface CallRequestBody {
   user_metadata?: Record<string, unknown>;
 }
 
-// === MAIN CALL ENDPOINT ===
 app.post('/call', async (req: Request, res: Response) => {
   const {
     room_name,
@@ -33,66 +33,71 @@ app.post('/call', async (req: Request, res: Response) => {
     join_token,
     admin_token,
     initial_prompt,
-    user_metadata = {}
+    user_metadata = {},
   } = req.body as CallRequestBody;
 
   if (!room_name || !agent_name || !join_token) {
     return res.status(400).json({
-      error: 'room_name, agent_name, and join_token are required'
+      error: 'room_name, agent_name, and join_token are required',
     });
   }
 
-  console.log('CALL RECEIVED: Inserting job with config:', {
+  console.log('CALL RECEIVED → Starting agent:', {
     room_name,
     agent_name,
     has_join_token: !!join_token,
     has_admin_token: !!admin_token,
     initial_prompt,
-    user_metadata
+    user_metadata,
   });
 
-  // Insert job in Supabase
   try {
-    const { data, error } = await supabase
-      .from('jobs')
-      .insert([
-        {
-          room_name,
-          agent_name,
-          join_token,
-          admin_token,
-          initial_prompt,
-          user_metadata,
-          status: 'pending'
-        }
-      ])
-      .select(); // Returns the inserted row
-
-    if (error) {
-      console.error('Failed to insert job:', error);
-      return res.status(500).json({ error: 'Failed to insert job', details: error.message });
-    }
-
-    console.log('Job inserted successfully:', data?.[0]?.id);
-    res.json({
-      status: 'Job accepted',
-      job_id: data?.[0]?.id
+    // Call the agent entry directly!
+    const result = await agent.entry({
+      room_name,
+      agent_name,
+      join_token,
+      admin_token,
+      initial_prompt,
+      user_metadata,
     });
-  } catch (err) {
-    console.error('Unexpected error inserting job:', err);
-    res.status(500).json({ error: 'Unexpected error', details: String(err) });
+
+    // Log result to Supabase
+    await supabase.from('agent_logs').insert([
+      {
+        room_name,
+        agent_name,
+        user_metadata,
+        result_status: result?.status || 'success',
+        log_time: new Date().toISOString(),
+      },
+    ]);
+
+    res.json({ status: 'Agent completed', result });
+  } catch (err: any) {
+    console.error('Agent error:', err);
+    // Log error to Supabase
+    await supabase.from('jobs').insert([
+      {
+        room_name,
+        agent_name,
+        user_metadata,
+        status: 'error',
+        error_message: err.message || String(err),
+        created_at: new Date().toISOString(),
+      },
+    ]);
+    res.status(500).json({ error: 'Agent failed', details: err.message || String(err) });
   }
 });
 
-// === AGENT STATUS ENDPOINT ===
 app.get('/agent-status', (req: Request, res: Response) => {
-  // This returns whatever (global as any).AGENT_JOIN_STATUS was set to by agent.ts
   res.json(
     (global as any).AGENT_JOIN_STATUS || {
       joined: false,
       roomName: null,
       agentName: null,
-      status: 'unknown'
+      status: 'unknown',
     }
   );
 });
