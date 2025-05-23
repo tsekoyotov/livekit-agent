@@ -2,8 +2,6 @@ import express, { Request, Response } from 'express';
 import dotenv from 'dotenv';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-// No need to import agent or cli here
-
 import { createClient } from '@supabase/supabase-js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -44,7 +42,7 @@ app.post('/call', async (req: Request, res: Response) => {
     });
   }
 
-  console.log('CONFIG FROM N8N →', {
+  console.log('CALL RECEIVED: Inserting job with config:', {
     room_name,
     agent_name,
     has_join_token: !!join_token,
@@ -54,33 +52,39 @@ app.post('/call', async (req: Request, res: Response) => {
   });
 
   // Insert job in Supabase
-  const { data, error } = await supabase
-    .from('jobs')
-    .insert([
-      {
-        room_name,
-        agent_name,
-        join_token,
-        admin_token,
-        initial_prompt,
-        user_metadata,
-        status: 'pending'
-      }
-    ])
-    .select(); // Returns the inserted row
+  try {
+    const { data, error } = await supabase
+      .from('jobs')
+      .insert([
+        {
+          room_name,
+          agent_name,
+          join_token,
+          admin_token,
+          initial_prompt,
+          user_metadata,
+          status: 'pending'
+        }
+      ])
+      .select(); // Returns the inserted row
 
-  if (error) {
-    console.error('Failed to insert job:', error);
-    return res.status(500).json({ error: 'Failed to insert job', details: error.message });
+    if (error) {
+      console.error('Failed to insert job:', error);
+      return res.status(500).json({ error: 'Failed to insert job', details: error.message });
+    }
+
+    console.log('Job inserted successfully:', data?.[0]?.id);
+    res.json({
+      status: 'Job accepted',
+      job_id: data?.[0]?.id
+    });
+  } catch (err) {
+    console.error('Unexpected error inserting job:', err);
+    res.status(500).json({ error: 'Unexpected error', details: String(err) });
   }
-
-  res.json({
-    status: 'Job accepted',
-    job_id: data?.[0]?.id
-  });
 });
 
-// === NEW: AGENT STATUS ENDPOINT ===
+// === AGENT STATUS ENDPOINT ===
 app.get('/agent-status', (req: Request, res: Response) => {
   // This returns whatever (global as any).AGENT_JOIN_STATUS was set to by agent.ts
   res.json(

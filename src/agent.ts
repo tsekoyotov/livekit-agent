@@ -42,6 +42,7 @@ export default defineAgent({
     console.log('AGENT_ROOM_NAME:', process.env.AGENT_ROOM_NAME);
     console.log('AGENT_AGENT_NAME:', process.env.AGENT_AGENT_NAME);
     console.log('AGENT_JOIN_TOKEN:', process.env.AGENT_JOIN_TOKEN);
+
     let connectOk = false;
     try {
       await ctx.connect();
@@ -51,6 +52,7 @@ export default defineAgent({
       console.error('Error during ctx.connect:', err);
     }
     if (!connectOk) return;
+
     // All config comes from env vars (set per-process)
     const roomName = process.env.AGENT_ROOM_NAME || '';
     const agentName = process.env.AGENT_AGENT_NAME || '';
@@ -80,7 +82,6 @@ export default defineAgent({
         'punctuation.',
     });
 
-    await ctx.connect();
     try {
       console.log('waiting for participant');
       const participant = await ctx.waitForParticipant();
@@ -130,6 +131,7 @@ export default defineAgent({
         agentName,
         status: 'error',
       };
+      console.error('Agent error:', e);
       throw e;
     }
   },
@@ -137,47 +139,60 @@ export default defineAgent({
 
 // ----------- SUPABASE JOB POLLER (MAIN PROCESS) ------------
 
-// This function will ONLY run in the main process, not in the worker/agent child process
 async function pollJobs() {
+  console.log('Job poller started!');
   while (true) {
-    const { data: jobs, error } = await supabase
-      .from('jobs')
-      .select('*')
-      .eq('status', 'pending')
-      .limit(1);
+    try {
+      const { data: jobs, error } = await supabase
+        .from('jobs')
+        .select('*')
+        .eq('status', 'pending')
+        .limit(1);
 
-    if (error) {
-      console.error('Supabase error:', error);
-    }
-
-    if (jobs && jobs.length > 0) {
-      const job = jobs[0];
-      try {
-        // Set process.env globally for this job
-process.env.AGENT_ROOM_NAME = job.room_name || '';
-process.env.AGENT_AGENT_NAME = job.agent_name || '';
-process.env.AGENT_JOIN_TOKEN = job.join_token || '';
-process.env.AGENT_ADMIN_TOKEN = job.admin_token || '';
-process.env.AGENT_INITIAL_PROMPT = job.initial_prompt || '';
-process.env.AGENT_USER_METADATA = job.user_metadata ? JSON.stringify(job.user_metadata) : '{}';
-
-cli.runApp(
-  new WorkerOptions({
-    agent: fileURLToPath(import.meta.url),
-  })
-);
-
-        // Mark job as completed
-        await supabase
-          .from('jobs')
-          .update({ status: 'completed' })
-          .eq('id', job.id);
-        console.log(`Processed job: ${job.id}`);
-      } catch (err) {
-        console.error('Error running agent for job', job.id, err);
+      if (error) {
+        console.error('Supabase error:', error);
       }
+
+      if (jobs && jobs.length > 0) {
+        const job = jobs[0];
+        try {
+          console.log('Picked up job:', job.id, job);
+
+          // Set process.env globally for this job
+          process.env.AGENT_ROOM_NAME = job.room_name || '';
+          process.env.AGENT_AGENT_NAME = job.agent_name || '';
+          process.env.AGENT_JOIN_TOKEN = job.join_token || '';
+          process.env.AGENT_ADMIN_TOKEN = job.admin_token || '';
+          process.env.AGENT_INITIAL_PROMPT = job.initial_prompt || '';
+          process.env.AGENT_USER_METADATA = job.user_metadata ? JSON.stringify(job.user_metadata) : '{}';
+
+          // Start the agent worker
+          cli.runApp(
+            new WorkerOptions({
+              agent: fileURLToPath(import.meta.url),
+            })
+          );
+
+          // Mark job as completed
+          await supabase
+            .from('jobs')
+            .update({ status: 'completed' })
+            .eq('id', job.id);
+
+          console.log(`Processed job: ${job.id}`);
+        } catch (err) {
+          console.error('Error running agent for job', job.id, err);
+        }
+      }
+    } catch (outerErr) {
+      console.error('Poller outer error:', outerErr);
     }
 
     await new Promise((res) => setTimeout(res, 2000)); // Wait 2s before polling again
   }
+}
+
+// Start the poller in main process only
+if (process.env.IS_WORKER !== 'true') {
+  pollJobs();
 }
