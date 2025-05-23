@@ -2,9 +2,7 @@ import express, { Request, Response } from 'express';
 import dotenv from 'dotenv';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-// REMOVE agent and cli imports, not used here
-// import agent from './agent.js';
-// import { cli } from '@livekit/agents';
+// No need to import agent or cli here
 
 import { createClient } from '@supabase/supabase-js';
 
@@ -29,6 +27,7 @@ interface CallRequestBody {
   user_metadata?: Record<string, unknown>;
 }
 
+// === MAIN CALL ENDPOINT ===
 app.post('/call', async (req: Request, res: Response) => {
   const {
     room_name,
@@ -81,7 +80,21 @@ app.post('/call', async (req: Request, res: Response) => {
   });
 });
 
+// === NEW: AGENT STATUS ENDPOINT ===
+app.get('/agent-status', (req: Request, res: Response) => {
+  // This returns whatever (global as any).AGENT_JOIN_STATUS was set to by agent.ts
+  res.json(
+    (global as any).AGENT_JOIN_STATUS || {
+      joined: false,
+      roomName: null,
+      agentName: null,
+      status: 'unknown'
+    }
+  );
+});
+
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
 app.listen(PORT, () => {
   console.log(`/call endpoint listening on port ${PORT}`);
+  console.log(`/agent-status endpoint available on port ${PORT}`);
 });
