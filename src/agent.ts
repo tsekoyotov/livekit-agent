@@ -38,6 +38,19 @@ export default defineAgent({
     proc.userData.vad = await silero.VAD.load();
   },
   entry: async (ctx: JobContext) => {
+    console.log('AGENT ENTRY STARTED');
+    console.log('AGENT_ROOM_NAME:', process.env.AGENT_ROOM_NAME);
+    console.log('AGENT_AGENT_NAME:', process.env.AGENT_AGENT_NAME);
+    console.log('AGENT_JOIN_TOKEN:', process.env.AGENT_JOIN_TOKEN);
+    let connectOk = false;
+    try {
+      await ctx.connect();
+      connectOk = true;
+      console.log('ctx.connect() OK');
+    } catch (err) {
+      console.error('Error during ctx.connect:', err);
+    }
+    if (!connectOk) return;
     // All config comes from env vars (set per-process)
     const roomName = process.env.AGENT_ROOM_NAME || '';
     const agentName = process.env.AGENT_AGENT_NAME || '';
