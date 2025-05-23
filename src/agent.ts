@@ -1,6 +1,6 @@
 // ─────────────────────────── src/agent.ts ───────────────────────────
 import { pipeline, llm, initializeLogger } from '@livekit/agents';
-import { Room, Participant }               from '@livekit/rtc-node';
+import { Room }                           from '@livekit/rtc-node';
 
 import * as deepgram   from '@livekit/agents-plugin-deepgram';
 import * as silero     from '@livekit/agents-plugin-silero';
@@ -20,8 +20,17 @@ if (!process.env.LIVEKIT_URL) {
 }
 const LIVEKIT_URL = process.env.LIVEKIT_URL!; // non-nullable
 
-// ─── init logger once ───────────────────────────────────────────────
+// ─── logger once ────────────────────────────────────────────────────
 initializeLogger({ pretty: false, level: 'info' });
+
+/*──────────────────────── MODEL SINGLETONS ────────────────────────*/
+/*  These are initialised the first time /call is hit; afterwards the
+    same instances are reused, so the container answers in <1 s.       */
+let vadSingleton:       silero.VAD        | null = null;
+let sttSingleton:       deepgram.STT      | null = null;
+let ttsSingleton:       elevenlabs.TTS    | null = null;
+let llmSingleton:       openai.LLM        | null = null;
+/*───────────────────────────────────────────────────────────────────*/
 
 // ─── main entry, called by server.ts ────────────────────────────────
 async function entry(config: {
@@ -34,7 +43,6 @@ async function entry(config: {
 }) {
   console.log('AGENT ENTRY STARTED', config);
 
-  // status for /agent-status
   (global as any).AGENT_JOIN_STATUS = {
     joined   : false,
     roomName : config.room_name,
@@ -43,13 +51,13 @@ async function entry(config: {
   };
 
   try {
-    // 1. load models / plugins
-    const vad      = await silero.VAD.load();
-    const stt      = new deepgram.STT();
-    const tts      = new elevenlabs.TTS();
-    const llmModel = new openai.LLM();
+    /* 1. load (or re-use) models / plugins */
+    if (!vadSingleton)  vadSingleton  = await silero.VAD.load();
+    if (!sttSingleton)  sttSingleton  = new deepgram.STT();
+    if (!ttsSingleton)  ttsSingleton  = new elevenlabs.TTS();
+    if (!llmSingleton)  llmSingleton  = new openai.LLM();
 
-    // 2. chat context
+    /* 2. chat context */
     const chatCtx = new llm.ChatContext().append({
       role: llm.ChatRole.SYSTEM,
       text:
@@ -57,55 +65,52 @@ async function entry(config: {
         'You are a LiveKit voice assistant. Speak clearly and concisely.',
     });
 
-    // 3. build the VoicePipelineAgent
+    /* 3. VoicePipelineAgent */
     const agent = new pipeline.VoicePipelineAgent(
-      vad,
-      stt,
-      llmModel,
-      tts,
+      vadSingleton,
+      sttSingleton,
+      llmSingleton,
+      ttsSingleton,
       { chatCtx },
     );
 
-    // 4. connect Room and start
+    /* 4. connect & start */
     const room = new Room();
     await room.connect(LIVEKIT_URL, config.join_token);
     await agent.start(room);
 
-    // ────────────────────────────────────────────────────────────
-// AUTO-DISCONNECT IF ALONE FOR 60 s
-// ────────────────────────────────────────────────────────────
-let aloneTimer: NodeJS.Timeout | null = null;
-const TIMEOUT_MS = 60_000;           // 60 seconds
-let remoteCount = 0;                 // participants other than the agent
+    /* ─── auto-disconnect after 60 s alone ───────────────────────── */
+    const TIMEOUT_MS = 60_000;
+    let aloneTimer: NodeJS.Timeout | null = null;
+    let remoteCount = 0; // participants other than the agent
 
-const maybeStartOrStopTimer = () => {
-  if (remoteCount === 0) {
-    if (!aloneTimer) {
-      aloneTimer = setTimeout(async () => {
-        console.log(
-          `[timeout] Agent alone for ${TIMEOUT_MS / 1_000}s – disconnecting`,
-        );
-        try {
-          await room.disconnect();
-        } finally {
-          process.exit(0);          // end container & free resources
+    const adjustTimer = () => {
+      if (remoteCount === 0) {
+        if (!aloneTimer) {
+          aloneTimer = setTimeout(async () => {
+            console.log(
+              `[timeout] Agent alone for ${TIMEOUT_MS / 1000}s – disconnecting`,
+            );
+            try {
+              await room.disconnect();
+            } finally {
+              process.exit(0); // end container, Railway spins a fresh one later
+            }
+          }, TIMEOUT_MS);
         }
-      }, TIMEOUT_MS);
-    }
-  } else if (aloneTimer) {
-    clearTimeout(aloneTimer);
-    aloneTimer = null;
-  }
-};
+      } else if (aloneTimer) {
+        clearTimeout(aloneTimer);
+        aloneTimer = null;
+      }
+    };
 
-// initial check right after the agent joins
-maybeStartOrStopTimer();
+    // initial check as soon as we’re connected
+    adjustTimer();
 
-// update the counter whenever someone joins / leaves
-room.on('participantConnected',   () => { remoteCount++; maybeStartOrStopTimer(); });
-room.on('participantDisconnected',() => { remoteCount--; maybeStartOrStopTimer(); });
+    room.on('participantConnected',   () => { remoteCount++; adjustTimer(); });
+    room.on('participantDisconnected',() => { remoteCount--; adjustTimer(); });
 
-    // 5. success
+    /* 5. success status */
     (global as any).AGENT_JOIN_STATUS = {
       joined   : true,
       roomName : config.room_name,
