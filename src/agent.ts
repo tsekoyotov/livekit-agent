@@ -39,11 +39,8 @@ export default defineAgent({
   },
   entry: async (ctx: JobContext) => {
     // All config comes from env vars (set per-process)
-    const roomName = process.env.AGENT_ROOM_NAME!;
-    const agentName = process.env.AGENT_AGENT_NAME!;
-    const joinToken = process.env.AGENT_JOIN_TOKEN!;
-    const adminToken = process.env.AGENT_ADMIN_TOKEN || '';
-    const initialPrompt = process.env.AGENT_INITIAL_PROMPT || '';
+    const roomName = process.env.AGENT_ROOM_NAME || '';
+    const agentName = process.env.AGENT_AGENT_NAME || '';
     let userMetadata = {};
     if (process.env.AGENT_USER_METADATA) {
       try {
@@ -52,6 +49,14 @@ export default defineAgent({
         userMetadata = {};
       }
     }
+
+    // These will be updated and exposed for status check
+    (global as any).AGENT_JOIN_STATUS = {
+      joined: false,
+      roomName,
+      agentName,
+      status: 'waiting',
+    };
 
     const vad = ctx.proc.userData.vad! as silero.VAD;
     const initialContext = new llm.ChatContext().append({
@@ -63,43 +68,57 @@ export default defineAgent({
     });
 
     await ctx.connect();
-    console.log('waiting for participant');
-    const participant = await ctx.waitForParticipant();
-    console.log(`starting assistant agent for ${participant.identity}`);
+    try {
+      console.log('waiting for participant');
+      const participant = await ctx.waitForParticipant();
+      console.log(`starting assistant agent for ${participant.identity}`);
 
-    // EXAMPLE: You can log to Supabase if you want!
-    // await supabase.from('calls').insert([
-    //   { agent: agentName, participant: participant.identity, started_at: new Date().toISOString() }
-    // ]);
+      // SET STATUS TO JOINED
+      (global as any).AGENT_JOIN_STATUS = {
+        joined: true,
+        roomName,
+        agentName,
+        status: 'joined',
+      };
 
-    const fncCtx: llm.FunctionContext = {
-      weather: {
-        description: 'Get the weather in a location',
-        parameters: z.object({
-          location: z.string().describe('The location to get the weather for'),
-        }),
-        execute: async ({ location }) => {
-          console.debug(`executing weather function for ${location}`);
-          const response = await fetch(`https://wttr.in/${location}?format=%C+%t`);
-          if (!response.ok) {
-            throw new Error(`Weather API returned status: ${response.status}`);
-          }
-          const weather = await response.text();
-          return `The weather in ${location} right now is ${weather}.`;
+      const fncCtx: llm.FunctionContext = {
+        weather: {
+          description: 'Get the weather in a location',
+          parameters: z.object({
+            location: z.string().describe('The location to get the weather for'),
+          }),
+          execute: async ({ location }) => {
+            console.debug(`executing weather function for ${location}`);
+            const response = await fetch(`https://wttr.in/${location}?format=%C+%t`);
+            if (!response.ok) {
+              throw new Error(`Weather API returned status: ${response.status}`);
+            }
+            const weather = await response.text();
+            return `The weather in ${location} right now is ${weather}.`;
+          },
         },
-      },
-    };
+      };
 
-    const agent = new pipeline.VoicePipelineAgent(
-      vad,
-      new deepgram.STT(),
-      new openai.LLM(),
-      new elevenlabs.TTS(),
-      { chatCtx: initialContext, fncCtx },
-    );
-    agent.start(ctx.room, participant);
+      const agent = new pipeline.VoicePipelineAgent(
+        vad,
+        new deepgram.STT(),
+        new openai.LLM(),
+        new elevenlabs.TTS(),
+        { chatCtx: initialContext, fncCtx },
+      );
+      agent.start(ctx.room, participant);
 
-    await agent.say('Hey, how can I help you today', true);
+      await agent.say('Hey, how can I help you today', true);
+    } catch (e) {
+      // SET STATUS TO ERROR
+      (global as any).AGENT_JOIN_STATUS = {
+        joined: false,
+        roomName,
+        agentName,
+        status: 'error',
+      };
+      throw e;
+    }
   },
 });
 
@@ -121,23 +140,20 @@ async function pollJobs() {
     if (jobs && jobs.length > 0) {
       const job = jobs[0];
       try {
-        // Pass each value as an ENV variable to the agent process
-        const env: Record<string, string> = {
-          ...process.env, // inherit all existing env vars!
-          AGENT_ROOM_NAME: job.room_name || '',
-          AGENT_AGENT_NAME: job.agent_name || '',
-          AGENT_JOIN_TOKEN: job.join_token || '',
-          AGENT_ADMIN_TOKEN: job.admin_token || '',
-          AGENT_INITIAL_PROMPT: job.initial_prompt || '',
-          AGENT_USER_METADATA: job.user_metadata ? JSON.stringify(job.user_metadata) : '{}',
-        };
+        // Set process.env globally for this job
+process.env.AGENT_ROOM_NAME = job.room_name || '';
+process.env.AGENT_AGENT_NAME = job.agent_name || '';
+process.env.AGENT_JOIN_TOKEN = job.join_token || '';
+process.env.AGENT_ADMIN_TOKEN = job.admin_token || '';
+process.env.AGENT_INITIAL_PROMPT = job.initial_prompt || '';
+process.env.AGENT_USER_METADATA = job.user_metadata ? JSON.stringify(job.user_metadata) : '{}';
 
-        // Launch the agent worker as a new process with per-job config
-        cli.runApp(
-          new WorkerOptions({
-            agent: fileURLToPath(import.meta.url),
-          })
-        );        
+cli.runApp(
+  new WorkerOptions({
+    agent: fileURLToPath(import.meta.url),
+  })
+);
+
         // Mark job as completed
         await supabase
           .from('jobs')
@@ -151,9 +167,4 @@ async function pollJobs() {
 
     await new Promise((res) => setTimeout(res, 2000)); // Wait 2s before polling again
   }
-}
-
-// Only start polling in the main process
-if (!process.env.AGENT_ROOM_NAME) {
-  pollJobs();
 }
