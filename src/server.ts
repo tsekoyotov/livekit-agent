@@ -77,20 +77,21 @@ app.post('/call', async (req: Request, res: Response) => {
   } catch (err: any) {
     console.error('Agent error:', err);
     // Log error to Supabase
-    await supabase.from('jobs').insert([
+    await supabase.from('agent_logs').insert([
       {
         room_name,
         agent_name,
         user_metadata,
-        status: 'error',
+        result_status: 'error',
         error_message: err.message || String(err),
-        created_at: new Date().toISOString(),
+        log_time: new Date().toISOString(),
       },
     ]);
     res.status(500).json({ error: 'Agent failed', details: err.message || String(err) });
   }
 });
 
+// Updated to match new "joined" logic in agent.ts
 app.get('/agent-status', (req: Request, res: Response) => {
   res.json(
     (global as any).AGENT_JOIN_STATUS || {

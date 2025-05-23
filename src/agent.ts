@@ -29,25 +29,24 @@ async function entry(config: {
   console.log('AGENT ENTRY STARTED');
   console.log('CONFIG:', config);
 
-  // Here, you would create a context similar to LiveKit's agent worker
-  // For demo, we just log and simulate work
+  // Set initial status to not joined
+  (global as any).AGENT_JOIN_STATUS = {
+    joined: false,
+    roomName: config.room_name,
+    agentName: config.agent_name,
+    status: 'waiting',
+  };
+
   try {
-    // For real agent logic, use actual LiveKit SDK context
-    // This is placeholder logic!
-    // Example: connect to room, wait for participant, interact...
+    // Example of a real agent connect
+    // You'd use actual LiveKit SDK logic here; let's simulate it:
+    // For real use: let ctx = ...; await ctx.connect();
 
-    // Set status (global for /agent-status)
-    (global as any).AGENT_JOIN_STATUS = {
-      joined: false,
-      roomName: config.room_name,
-      agentName: config.agent_name,
-      status: 'waiting',
-    };
+    // Simulate LiveKit connection
+    // REMOVE THIS LINE and replace with actual connect logic:
+    await new Promise(res => setTimeout(res, 3000)); // Simulate "connecting..."
 
-    // Simulate agent doing work
-    await new Promise(res => setTimeout(res, 3000)); // Fake delay
-
-    // Set status to joined
+    // After successful connection only, set joined:true!
     (global as any).AGENT_JOIN_STATUS = {
       joined: true,
       roomName: config.room_name,
@@ -55,7 +54,7 @@ async function entry(config: {
       status: 'joined',
     };
 
-    console.log('AGENT finished successfully');
+    console.log('AGENT is now in the room! (joined: true)');
     return { status: 'success' };
   } catch (err) {
     (global as any).AGENT_JOIN_STATUS = {
@@ -64,7 +63,7 @@ async function entry(config: {
       agentName: config.agent_name,
       status: 'error',
     };
-    console.error('AGENT failed:', err);
+    console.error('AGENT failed to join room:', err);
     throw err;
   }
 }
