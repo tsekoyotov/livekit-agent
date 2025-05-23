@@ -87,8 +87,7 @@ export async function entry(config: {
           aloneTimer = setTimeout(async () => {
             console.log(`[timeout] Agent alone ${TIMEOUT_MS / 1000}s → disconnect`);
             try {
-              await agent.stop();
-              await room.disconnect();
+              await room.disconnect();   // this closes all tracks & the pipeline
             } finally {
               // clear state so the same container can accept a new /call
               remoteCount = 0;
