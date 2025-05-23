@@ -1,6 +1,6 @@
 // ─────────────────────────── src/agent.ts ───────────────────────────
 import { pipeline, llm, initializeLogger } from '@livekit/agents';
-import { Room }          from '@livekit/rtc-node';
+import { Room, Participant }               from '@livekit/rtc-node';
 
 import * as deepgram   from '@livekit/agents-plugin-deepgram';
 import * as silero     from '@livekit/agents-plugin-silero';
@@ -18,12 +18,12 @@ dotenv.config({ path: path.join(__dirname, '../.env.local') });
 if (!process.env.LIVEKIT_URL) {
   throw new Error('LIVEKIT_URL is missing in environment');
 }
-const LIVEKIT_URL = process.env.LIVEKIT_URL!;  // non-nullable for TS
+const LIVEKIT_URL = process.env.LIVEKIT_URL!; // non-nullable
 
-// ─── initial-se logger once (pretty is required) ────────────────────
+// ─── init logger once ───────────────────────────────────────────────
 initializeLogger({ pretty: false, level: 'info' });
 
-// ─── main entry called by server.ts ─────────────────────────────────
+// ─── main entry, called by server.ts ────────────────────────────────
 async function entry(config: {
   room_name      : string;
   agent_name     : string;
@@ -32,7 +32,6 @@ async function entry(config: {
   initial_prompt?: string;
   user_metadata ?: Record<string, unknown>;
 }) {
-
   console.log('AGENT ENTRY STARTED', config);
 
   // status for /agent-status
@@ -71,6 +70,40 @@ async function entry(config: {
     const room = new Room();
     await room.connect(LIVEKIT_URL, config.join_token);
     await agent.start(room);
+
+    // ────────────────────────────────────────────────────────────
+// AUTO-DISCONNECT IF ALONE FOR 60 s
+// ────────────────────────────────────────────────────────────
+let aloneTimer: NodeJS.Timeout | null = null;
+const TIMEOUT_MS = 60_000;           // 60 seconds
+let remoteCount = 0;                 // participants other than the agent
+
+const maybeStartOrStopTimer = () => {
+  if (remoteCount === 0) {
+    if (!aloneTimer) {
+      aloneTimer = setTimeout(async () => {
+        console.log(
+          `[timeout] Agent alone for ${TIMEOUT_MS / 1_000}s – disconnecting`,
+        );
+        try {
+          await room.disconnect();
+        } finally {
+          process.exit(0);          // end container & free resources
+        }
+      }, TIMEOUT_MS);
+    }
+  } else if (aloneTimer) {
+    clearTimeout(aloneTimer);
+    aloneTimer = null;
+  }
+};
+
+// initial check right after the agent joins
+maybeStartOrStopTimer();
+
+// update the counter whenever someone joins / leaves
+room.on('participantConnected',   () => { remoteCount++; maybeStartOrStopTimer(); });
+room.on('participantDisconnected',() => { remoteCount--; maybeStartOrStopTimer(); });
 
     // 5. success
     (global as any).AGENT_JOIN_STATUS = {
