@@ -1,9 +1,8 @@
 import {
-  type JobContext,
-  defineAgent,
-  llm,
   pipeline,
+  llm,
 } from '@livekit/agents';
+import { Room } from '@livekit/rtc-node';
 import * as deepgram from '@livekit/agents-plugin-deepgram';
 import * as elevenlabs from '@livekit/agents-plugin-elevenlabs';
 import * as openai from '@livekit/agents-plugin-openai';
@@ -11,13 +10,11 @@ import * as silero from '@livekit/agents-plugin-silero';
 import dotenv from 'dotenv';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { z } from 'zod';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const envPath = path.join(__dirname, '../.env.local');
 dotenv.config({ path: envPath });
 
-// This function acts like the "entry" for every call
 async function entry(config: {
   room_name: string;
   agent_name: string;
@@ -29,7 +26,7 @@ async function entry(config: {
   console.log('AGENT ENTRY STARTED');
   console.log('CONFIG:', config);
 
-  // Set initial status to not joined
+  // Set default status
   (global as any).AGENT_JOIN_STATUS = {
     joined: false,
     roomName: config.room_name,
@@ -38,15 +35,35 @@ async function entry(config: {
   };
 
   try {
-    // Example of a real agent connect
-    // You'd use actual LiveKit SDK logic here; let's simulate it:
-    // For real use: let ctx = ...; await ctx.connect();
+    // Load pipeline modules
+    const vad = await silero.VAD.load();
+    const stt = new deepgram.STT();
+    const tts = new elevenlabs.TTS();
+    const llmModel = new openai.LLM();
+    const initialContext = new llm.ChatContext().append({
+      role: llm.ChatRole.SYSTEM,
+      text:
+        'You are a voice assistant created by LiveKit. Your interface with users will be voice. ' +
+        'You should use short and concise responses, and avoid usage of unpronounceable punctuation.',
+    });
 
-    // Simulate LiveKit connection
-    // REMOVE THIS LINE and replace with actual connect logic:
-    await new Promise(res => setTimeout(res, 3000)); // Simulate "connecting..."
+    // 1. Create and connect Room
+    const serverUrl = process.env.LIVEKIT_WS_URL!;
+    const token = config.join_token;
+    const room = new Room();
+    await room.connect(serverUrl, token);
 
-    // After successful connection only, set joined:true!
+    // 2. Create agent and start it
+    const agent = new pipeline.VoicePipelineAgent(
+      vad,
+      stt,
+      llmModel,
+      tts,
+      { chatCtx: initialContext }
+    );
+    agent.start(room);
+
+    // Mark as joined
     (global as any).AGENT_JOIN_STATUS = {
       joined: true,
       roomName: config.room_name,
@@ -55,6 +72,7 @@ async function entry(config: {
     };
 
     console.log('AGENT is now in the room! (joined: true)');
+
     return { status: 'success' };
   } catch (err) {
     (global as any).AGENT_JOIN_STATUS = {
@@ -68,5 +86,4 @@ async function entry(config: {
   }
 }
 
-// Export "entry" so server.ts can import and call it
 export default { entry };
