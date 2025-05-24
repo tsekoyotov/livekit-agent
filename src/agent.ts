@@ -50,8 +50,26 @@ export async function entry(config: {
   try {
     /* 1 ─ load (or reuse) models */
     if (!vadSingleton)  vadSingleton  = await silero.VAD.load();
-    if (!sttSingleton)  sttSingleton  = new deepgram.STT();
-    if (!ttsSingleton)  ttsSingleton  = new elevenlabs.TTS();
+
+    if (!sttSingleton)  sttSingleton  = new deepgram.STT({
+      apiKey: process.env.DEEPGRAM_API_KEY,
+    });
+
+    if (!ttsSingleton) {
+      if (!process.env.ELEVEN_API_KEY)  throw new Error('Missing ELEVEN_API_KEY');
+      if (!process.env.ELEVEN_VOICE_ID) throw new Error('Missing ELEVEN_VOICE_ID');
+
+      ttsSingleton = new elevenlabs.TTS({
+        apiKey : process.env.ELEVEN_API_KEY,
+        voice  : {
+          id      : process.env.ELEVEN_VOICE_ID.trim(),
+          name    : 'default',
+          category: 'premade',
+        },
+        modelID: (process.env.ELEVEN_MODEL_ID ?? 'eleven_multilingual_v2').trim(),
+      });
+    }
+
     if (!llmSingleton)  llmSingleton  = new openai.LLM();
 
     /* 2 ─ chat context */
@@ -76,7 +94,7 @@ export async function entry(config: {
     await room.connect(LIVEKIT_URL, config.join_token);
     await agent.start(room);
 
-    /* ── lonely-timer (60 s) ─────────────────────────────────────── */
+    /* ── lonely-timer (60 s) ───────────────────────────────────────── */
     const TIMEOUT_MS = 60_000;
     let aloneTimer: NodeJS.Timeout | null = null;
     let remoteCount = 0;
@@ -87,9 +105,8 @@ export async function entry(config: {
           aloneTimer = setTimeout(async () => {
             console.log(`[timeout] Agent alone ${TIMEOUT_MS / 1000}s → disconnect`);
             try {
-              await room.disconnect();   // this closes all tracks & the pipeline
+              await room.disconnect();
             } finally {
-              // clear state so the same container can accept a new /call
               remoteCount = 0;
               aloneTimer  = null;
               (global as any).AGENT_JOIN_STATUS.status = 'idle';
