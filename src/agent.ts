@@ -89,10 +89,17 @@ export async function entry(config: {
       { chatCtx },
     );
 
+   // ...[same as before]...
+
     /* 4 ─ connect & start */
     const room = new Room();
     await room.connect(LIVEKIT_URL, config.join_token);
+
+    // 👉 Add this line for API endpoint use:
+    (globalThis as any).AGENT_LK_ROOM = room;
+
     await agent.start(room);
+
 
     /* ── lonely-timer (60 s) ───────────────────────────────────────── */
     const TIMEOUT_MS = 60_000;
