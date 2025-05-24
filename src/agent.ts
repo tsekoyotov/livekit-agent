@@ -1,4 +1,8 @@
 // ─────────────────────────── src/agent.ts ───────────────────────────
+import { webcrypto as _crypto } from 'crypto';           // <─ Poly-fill start
+// @ts-ignore
+if (!globalThis.crypto) globalThis.crypto = _crypto;     // <─ Poly-fill end
+
 import { pipeline, llm, initializeLogger } from '@livekit/agents';
 import { Room }                           from '@livekit/rtc-node';
 
@@ -61,11 +65,7 @@ export async function entry(config: {
 
       ttsSingleton = new elevenlabs.TTS({
         apiKey : process.env.ELEVEN_API_KEY,
-        voice  : {
-          id      : process.env.ELEVEN_VOICE_ID.trim(),
-          name    : 'default',
-          category: 'premade',
-        },
+        voice  : { id: process.env.ELEVEN_VOICE_ID.trim(), name: 'default', category: 'premade' },
         modelID: (process.env.ELEVEN_MODEL_ID ?? 'eleven_multilingual_v2').trim(),
       });
     }
