@@ -103,8 +103,27 @@ app.get('/agent-status', (req: Request, res: Response) => {
   );
 });
 
+/** 
+ * NEW: Agent Ping Endpoint
+ * Pings the connected LiveKit room and returns round-trip delay in ms
+ */
+app.get('/agent-ping', async (req: Request, res: Response) => {
+  try {
+    const room = (globalThis as any).AGENT_LK_ROOM;
+    if (!room || typeof room.ping !== 'function') {
+      return res.status(400).json({ error: 'No active LiveKit room connection.' });
+    }
+    const ping = await room.ping();
+    // ping is in ms (number)
+    res.json({ ping_ms: ping });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Ping failed', details: err.message || String(err) });
+  }
+});
+
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
 app.listen(PORT, () => {
   console.log(`/call endpoint listening on port ${PORT}`);
   console.log(`/agent-status endpoint available on port ${PORT}`);
+  console.log(`/agent-ping endpoint available on port ${PORT}`);
 });
